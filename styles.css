@@ -155,12 +155,17 @@ button:active { opacity: 0.78; }
 }
 
 .camera-preview {
-  position: relative;
-  margin-top: 16px;
+  position: absolute;
+  z-index: 2;
+  top: 20px;
+  right: 20px;
+  width: min(300px, 28vw);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 18px;
-  background: #f3f3f3;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 14px 48px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
 }
 
 .preview-header {
@@ -169,13 +174,13 @@ button:active { opacity: 0.78; }
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .preview-body {
   display: block;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 4 / 3;
   background: #eee;
 }
 
@@ -185,20 +190,6 @@ button:active { opacity: 0.78; }
   height: 100%;
   object-fit: cover;
   transform: scaleX(-1);
-}
-
-/* Keep the video alive for MediaPipe while making the preview effectively invisible. */
-.camera-preview.preview-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  opacity: 0;
-  pointer-events: none;
-  clip-path: inset(50%);
 }
 
 .stage.ui-hidden .panel { display: none; }
@@ -226,6 +217,17 @@ button:active { opacity: 0.78; }
 
   .button-row {
     grid-template-columns: 1fr;
+  }
+
+  .camera-preview {
+    top: 14px;
+    right: 14px;
+    width: min(36vw, 280px);
+    border-radius: 20px;
+  }
+
+  .preview-body {
+    aspect-ratio: 3 / 4;
   }
 
   .gesture-hint {

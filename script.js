@@ -12,13 +12,12 @@ const thresholdEl = document.getElementById('threshold');
 const toggleCamera = document.getElementById('toggleCamera');
 const toggleBackground = document.getElementById('toggleBackground');
 const cameraPreview = document.getElementById('cameraPreview');
-const togglePreview = document.getElementById('togglePreview');
 const closePanel = document.getElementById('closePanel');
 const panel = document.getElementById('settingsPanel');
 const stage = document.querySelector('.stage');
 
 const ICON_SRC = 'Head.svg';
-const PROCESS_INTERVAL_MS = 50; // ~20 fps is enough for this installation effect.
+const PROCESS_INTERVAL_MS = 45; // ~22 fps: responsive without overworking kiosk hardware.
 
 const state = {
   ready: false,
@@ -35,6 +34,10 @@ const state = {
   darkBackground: false,
   selectionCacheKey: '',
   selectedCells: [],
+  cellSmoothing: null,
+  cellSmoothingCols: 0,
+  cellSmoothingRows: 0,
+  selectedCentroid: null,
 };
 
 function setStatus(message) {
@@ -71,6 +74,23 @@ function sampleMask(maskData, sampleX, sampleY) {
   const r = maskData.data[idx];
   const a = maskData.data[idx + 3];
   return a < 250 ? a : r;
+}
+
+function sampleMaskNeighbourhood(maskData, sampleX, sampleY, radiusX, radiusY) {
+  // A small max-filter helps retain thin limbs/fingers that can fall between grid samples.
+  const offsets = [
+    [0, 0],
+    [-radiusX, 0], [radiusX, 0],
+    [0, -radiusY], [0, radiusY],
+    [-radiusX, -radiusY], [radiusX, -radiusY],
+    [-radiusX, radiusY], [radiusX, radiusY],
+  ];
+
+  let best = 0;
+  for (const [dx, dy] of offsets) {
+    best = Math.max(best, sampleMask(maskData, sampleX + dx, sampleY + dy));
+  }
+  return best;
 }
 
 function getIconCanvas(size) {
@@ -139,8 +159,27 @@ function computeFrontPersonCells(maskData) {
 
   const cols = Math.floor(width / spacing) + 1;
   const rows = Math.floor(height / spacing) + 1;
-  const occupied = new Uint8Array(cols * rows);
-  const confidence = new Uint8Array(cols * rows);
+  const cellCount = cols * rows;
+
+  if (
+    !state.cellSmoothing ||
+    state.cellSmoothingCols !== cols ||
+    state.cellSmoothingRows !== rows
+  ) {
+    state.cellSmoothing = new Float32Array(cellCount);
+    state.cellSmoothingCols = cols;
+    state.cellSmoothingRows = rows;
+    state.selectedCentroid = null;
+  }
+
+  const occupied = new Uint8Array(cellCount);
+  const confidence = new Uint8Array(cellCount);
+
+  // Sample slightly around each matrix point instead of only one exact pixel.
+  // This is especially useful for hands, forearms, hair, and other thin edges.
+  const neighbourhoodScreenRadius = Math.max(5, spacing * 0.28);
+  const neighbourhoodMaskRadiusX = neighbourhoodScreenRadius / fit.scale;
+  const neighbourhoodMaskRadiusY = neighbourhoodScreenRadius / fit.scale;
 
   for (let row = 0; row < rows; row++) {
     const screenY = row * spacing;
@@ -153,16 +192,55 @@ function computeFrontPersonCells(maskData) {
       const maskX = (mirroredScreenX - fit.x) / fit.scale;
       if (maskX < 0 || maskX >= maskData.width) continue;
 
-      const c = sampleMask(maskData, maskX, maskY);
-      if (c > threshold) {
-        const idx = row * cols + col;
+      const idx = row * cols + col;
+      const raw = sampleMaskNeighbourhood(
+        maskData,
+        maskX,
+        maskY,
+        neighbourhoodMaskRadiusX,
+        neighbourhoodMaskRadiusY
+      );
+
+      // Fast attack, slow release. New body pixels appear quickly, while brief
+      // segmentation misses fade out over several frames instead of flickering.
+      const previous = state.cellSmoothing[idx];
+      const alpha = raw >= previous ? 0.58 : 0.13;
+      const smoothed = previous + (raw - previous) * alpha;
+      state.cellSmoothing[idx] = smoothed;
+      confidence[idx] = Math.max(0, Math.min(255, Math.round(smoothed)));
+
+      // A little hysteresis: once a cell belongs to the person, keep it until
+      // confidence falls meaningfully below the visible threshold.
+      const onThreshold = threshold;
+      const holdThreshold = Math.max(8, threshold - 24);
+      if (smoothed > onThreshold || (previous > onThreshold && smoothed > holdThreshold)) {
         occupied[idx] = 1;
-        confidence[idx] = c;
       }
     }
   }
 
-  const visited = new Uint8Array(occupied.length);
+  // Build a connectivity mask with a tiny one-cell bridge. We use this only to
+  // keep limbs attached through brief gaps; rendered cells still come from the
+  // original occupied mask so the silhouette does not visibly get fatter.
+  const connected = occupied.slice();
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (occupied[idx]) continue;
+
+      let horizontalBridge = false;
+      let verticalBridge = false;
+      if (col > 0 && col + 1 < cols) {
+        horizontalBridge = occupied[idx - 1] && occupied[idx + 1];
+      }
+      if (row > 0 && row + 1 < rows) {
+        verticalBridge = occupied[idx - cols] && occupied[idx + cols];
+      }
+      if (horizontalBridge || verticalBridge) connected[idx] = 1;
+    }
+  }
+
+  const visited = new Uint8Array(cellCount);
   const components = [];
   const neighbours = [
     [-1, -1], [0, -1], [1, -1],
@@ -170,8 +248,8 @@ function computeFrontPersonCells(maskData) {
     [-1, 1],  [0, 1],   [1, 1],
   ];
 
-  for (let start = 0; start < occupied.length; start++) {
-    if (!occupied[start] || visited[start]) continue;
+  for (let start = 0; start < connected.length; start++) {
+    if (!connected[start] || visited[start]) continue;
 
     const queue = [start];
     visited[start] = 1;
@@ -179,6 +257,7 @@ function computeFrontPersonCells(maskData) {
     let head = 0;
     let sumX = 0;
     let sumY = 0;
+    let renderCellCount = 0;
     let intersectsCenterZone = false;
 
     while (head < queue.length) {
@@ -188,11 +267,14 @@ function computeFrontPersonCells(maskData) {
       const x = col * spacing;
       const y = row * spacing;
 
-      cells.push({ x, y, confidence: confidence[idx] });
-      sumX += x;
-      sumY += y;
+      if (occupied[idx]) {
+        cells.push({ x, y, confidence: confidence[idx] });
+        sumX += x;
+        sumY += y;
+        renderCellCount += 1;
+      }
 
-      if (x >= width * 0.22 && x <= width * 0.78 && y >= height * 0.08 && y <= height * 0.95) {
+      if (x >= width * 0.18 && x <= width * 0.82 && y >= height * 0.05 && y <= height * 0.97) {
         intersectsCenterZone = true;
       }
 
@@ -201,34 +283,55 @@ function computeFrontPersonCells(maskData) {
         const nr = row + dy;
         if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
         const ni = nr * cols + nc;
-        if (occupied[ni] && !visited[ni]) {
+        if (connected[ni] && !visited[ni]) {
           visited[ni] = 1;
           queue.push(ni);
         }
       }
     }
 
-    const cx = sumX / cells.length;
-    const cy = sumY / cells.length;
+    if (!renderCellCount) continue;
+
+    const cx = sumX / renderCellCount;
+    const cy = sumY / renderCellCount;
     const xDist = Math.abs(cx - width / 2) / Math.max(1, width / 2);
     const yDist = Math.abs(cy - height * 0.55) / Math.max(1, height * 0.55);
-    const centrality = Math.max(0.28, 1 - xDist * 0.55 - yDist * 0.12);
+    const centrality = Math.max(0.22, 1 - xDist * 0.62 - yDist * 0.1);
+
+    let continuity = 1;
+    if (state.selectedCentroid) {
+      const dx = (cx - state.selectedCentroid.x) / Math.max(1, width);
+      const dy = (cy - state.selectedCentroid.y) / Math.max(1, height);
+      const distance = Math.hypot(dx, dy);
+      continuity += Math.max(0, 0.45 - distance) * 0.9;
+    }
 
     components.push({
       cells,
-      size: cells.length,
+      size: renderCellCount,
+      cx,
+      cy,
       intersectsCenterZone,
-      score: cells.length * centrality,
+      score: renderCellCount * centrality * continuity,
     });
   }
 
-  const minCells = Math.max(8, Math.round(cols * rows * 0.012));
+  const minCells = Math.max(6, Math.round(cols * rows * 0.008));
   let candidates = components.filter((component) => component.size >= minCells);
   const centralCandidates = candidates.filter((component) => component.intersectsCenterZone);
   if (centralCandidates.length) candidates = centralCandidates;
 
   candidates.sort((a, b) => b.score - a.score);
-  state.selectedCells = candidates.length ? candidates[0].cells : [];
+  const winner = candidates[0];
+
+  if (winner) {
+    state.selectedCells = winner.cells;
+    state.selectedCentroid = { x: winner.cx, y: winner.cy };
+  } else {
+    state.selectedCells = [];
+    state.selectedCentroid = null;
+  }
+
   state.selectionCacheKey = cacheKey;
   return state.selectedCells;
 }
@@ -362,12 +465,6 @@ function togglePanel() {
 function setupUiControls() {
   closePanel.addEventListener('click', hidePanel);
 
-  togglePreview.addEventListener('click', () => {
-    const hidden = cameraPreview.classList.toggle('preview-hidden');
-    togglePreview.textContent = hidden ? 'Show camera preview' : 'Hide camera preview';
-    togglePreview.setAttribute('aria-expanded', String(!hidden));
-  });
-
   toggleBackground.addEventListener('click', () => {
     state.darkBackground = !state.darkBackground;
     toggleBackground.textContent = state.darkBackground ? 'Background: Black' : 'Background: White';
@@ -378,7 +475,7 @@ function setupUiControls() {
   let lastTapY = 0;
 
   stage.addEventListener('pointerup', (event) => {
-    if (event.target.closest('.panel')) return;
+    if (event.target.closest('.panel') || event.target.closest('.camera-preview')) return;
 
     const now = performance.now();
     const dt = now - lastTapAt;
@@ -444,7 +541,7 @@ async function boot() {
     });
 
     segmenter.setOptions({
-      modelSelection: 1,
+      modelSelection: 0,
       selfieMode: false,
     });
 

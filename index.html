@@ -40,20 +40,18 @@
 
         <div class="button-row">
           <button id="toggleBackground" class="secondary-button" type="button">Background: White</button>
-          <button id="togglePreview" class="secondary-button" type="button" aria-expanded="false">Show camera preview</button>
+          <button id="toggleCamera" type="button">Pause camera</button>
         </div>
-
-        <button id="toggleCamera" type="button">Pause camera</button>
       </div>
 
-      <section class="camera-preview preview-hidden" id="cameraPreview" aria-label="Webcam input preview">
-        <div class="preview-header">Webcam input</div>
-        <div class="preview-body">
-          <video id="video" playsinline muted></video>
-        </div>
-      </section>
+      <p class="gesture-hint">Double-tap the artwork to show or hide controls.</p>
+    </section>
 
-      <p class="gesture-hint">Double-tap anywhere outside this panel to show or hide controls.</p>
+    <section class="camera-preview" id="cameraPreview" aria-label="Live camera preview">
+      <div class="preview-header">You</div>
+      <div class="preview-body">
+        <video id="video" playsinline muted></video>
+      </div>
     </section>
 
     <canvas id="maskCanvas"></canvas>
