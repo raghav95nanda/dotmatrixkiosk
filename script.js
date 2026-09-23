@@ -9,8 +9,11 @@ const cacheStatusEl = document.getElementById('cacheStatus');
 const spacingEl = document.getElementById('spacing');
 const iconSizeEl = document.getElementById('iconSize');
 const thresholdEl = document.getElementById('threshold');
+const matrixZoomEl = document.getElementById('matrixZoom');
+const zoomValueEl = document.getElementById('zoomValue');
 const toggleCamera = document.getElementById('toggleCamera');
 const toggleBackground = document.getElementById('toggleBackground');
+const togglePreviewVisibility = document.getElementById('togglePreviewVisibility');
 const cameraPreview = document.getElementById('cameraPreview');
 const closePanel = document.getElementById('closePanel');
 const panel = document.getElementById('settingsPanel');
@@ -38,6 +41,8 @@ const state = {
   cellSmoothingCols: 0,
   cellSmoothingRows: 0,
   selectedCentroid: null,
+  matrixZoom: 1,
+  cameraPosition: null,
 };
 
 function setStatus(message) {
@@ -348,16 +353,27 @@ function drawSvgMatrix() {
 
   const threshold = Number(thresholdEl.value) || 120;
   const iconSize = Number(iconSizeEl.value) || 36;
-  const iconCanvas = getIconCanvas(iconSize);
+  const zoom = state.matrixZoom;
+  const iconCanvas = getIconCanvas(Math.max(8, iconSize * zoom));
   const selectedCells = computeFrontPersonCells(state.lastMaskData);
+  const centerX = window.innerWidth / 2;
+  const centerY = window.innerHeight / 2;
 
   for (const cell of selectedCells) {
     const normalized = Math.min(1, Math.max(0, (cell.confidence - threshold) / (255 - threshold)));
+    const drawX = centerX + (cell.x - centerX) * zoom;
+    const drawY = centerY + (cell.y - centerY) * zoom;
+
+    if (
+      drawX < -iconCanvas.width || drawX > window.innerWidth + iconCanvas.width ||
+      drawY < -iconCanvas.height || drawY > window.innerHeight + iconCanvas.height
+    ) continue;
+
     ctx.globalAlpha = 0.68 + normalized * 0.32;
     ctx.drawImage(
       iconCanvas,
-      cell.x - iconCanvas.width / 2,
-      cell.y - iconCanvas.height / 2
+      drawX - iconCanvas.width / 2,
+      drawY - iconCanvas.height / 2
     );
   }
 
@@ -462,6 +478,136 @@ function togglePanel() {
   stage.classList.toggle('ui-hidden');
 }
 
+function cameraIsHidden() {
+  return stage.classList.contains('camera-hidden');
+}
+
+function showCameraPreview() {
+  stage.classList.remove('camera-hidden');
+  togglePreviewVisibility.textContent = 'Hide camera preview';
+  requestAnimationFrame(clampCameraPosition);
+}
+
+function hideCameraPreview() {
+  stage.classList.add('camera-hidden');
+  togglePreviewVisibility.textContent = 'Show camera preview';
+}
+
+function toggleCameraPreview() {
+  if (cameraIsHidden()) showCameraPreview();
+  else hideCameraPreview();
+}
+
+function applyCameraPosition(left, top, persist = true) {
+  const rect = cameraPreview.getBoundingClientRect();
+  const maxLeft = Math.max(0, window.innerWidth - rect.width);
+  const maxTop = Math.max(0, window.innerHeight - rect.height);
+  const clampedLeft = Math.max(0, Math.min(maxLeft, left));
+  const clampedTop = Math.max(0, Math.min(maxTop, top));
+
+  cameraPreview.style.left = `${clampedLeft}px`;
+  cameraPreview.style.top = `${clampedTop}px`;
+  cameraPreview.style.right = 'auto';
+  cameraPreview.style.bottom = 'auto';
+
+  state.cameraPosition = { left: clampedLeft, top: clampedTop };
+
+  if (persist && window.innerWidth > 0 && window.innerHeight > 0) {
+    try {
+      localStorage.setItem('matrixCameraPosition', JSON.stringify({
+        x: clampedLeft / window.innerWidth,
+        y: clampedTop / window.innerHeight,
+      }));
+    } catch (_) {}
+  }
+}
+
+function restoreCameraPosition() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('matrixCameraPosition') || 'null');
+    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+      requestAnimationFrame(() => {
+        applyCameraPosition(saved.x * window.innerWidth, saved.y * window.innerHeight, false);
+      });
+    }
+  } catch (_) {}
+}
+
+function clampCameraPosition() {
+  if (!state.cameraPosition || cameraIsHidden()) return;
+  applyCameraPosition(state.cameraPosition.left, state.cameraPosition.top, false);
+}
+
+function setupCameraDraggingAndDoubleTap() {
+  let dragPointerId = null;
+  let startPointerX = 0;
+  let startPointerY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let moved = false;
+  let lastTapAt = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
+
+  cameraPreview.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    const rect = cameraPreview.getBoundingClientRect();
+    dragPointerId = event.pointerId;
+    startPointerX = event.clientX;
+    startPointerY = event.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    moved = false;
+    cameraPreview.classList.add('dragging');
+    cameraPreview.setPointerCapture?.(event.pointerId);
+  });
+
+  cameraPreview.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== dragPointerId) return;
+    const dx = event.clientX - startPointerX;
+    const dy = event.clientY - startPointerY;
+    if (Math.hypot(dx, dy) > 7) moved = true;
+    if (!moved) return;
+    event.preventDefault();
+    applyCameraPosition(startLeft + dx, startTop + dy, false);
+  });
+
+  const finishPointer = (event) => {
+    if (event.pointerId !== dragPointerId) return;
+    cameraPreview.classList.remove('dragging');
+    cameraPreview.releasePointerCapture?.(event.pointerId);
+    dragPointerId = null;
+
+    if (moved) {
+      if (state.cameraPosition) applyCameraPosition(state.cameraPosition.left, state.cameraPosition.top, true);
+      lastTapAt = 0;
+      return;
+    }
+
+    const now = performance.now();
+    const dt = now - lastTapAt;
+    const distance = Math.hypot(event.clientX - lastTapX, event.clientY - lastTapY);
+
+    if (dt > 0 && dt < 360 && distance < 56) {
+      event.preventDefault();
+      hideCameraPreview();
+      lastTapAt = 0;
+      return;
+    }
+
+    lastTapAt = now;
+    lastTapX = event.clientX;
+    lastTapY = event.clientY;
+  };
+
+  cameraPreview.addEventListener('pointerup', finishPointer);
+  cameraPreview.addEventListener('pointercancel', (event) => {
+    if (event.pointerId !== dragPointerId) return;
+    cameraPreview.classList.remove('dragging');
+    dragPointerId = null;
+  });
+}
+
 function setupUiControls() {
   closePanel.addEventListener('click', hidePanel);
 
@@ -469,6 +615,17 @@ function setupUiControls() {
     state.darkBackground = !state.darkBackground;
     toggleBackground.textContent = state.darkBackground ? 'Background: Black' : 'Background: White';
   });
+
+  togglePreviewVisibility.addEventListener('click', toggleCameraPreview);
+
+  matrixZoomEl.addEventListener('input', () => {
+    const value = Math.max(60, Math.min(180, Number(matrixZoomEl.value) || 100));
+    state.matrixZoom = value / 100;
+    zoomValueEl.textContent = `${value}%`;
+  });
+
+  setupCameraDraggingAndDoubleTap();
+  restoreCameraPosition();
 
   let lastTapAt = 0;
   let lastTapX = 0;
@@ -483,7 +640,15 @@ function setupUiControls() {
 
     if (dt > 0 && dt < 360 && distance < 56) {
       event.preventDefault();
-      togglePanel();
+
+      const panelHidden = stage.classList.contains('ui-hidden');
+      if (panelHidden && cameraIsHidden()) {
+        showPanel();
+        showCameraPreview();
+      } else {
+        togglePanel();
+      }
+
       lastTapAt = 0;
       return;
     }
@@ -499,7 +664,13 @@ function setupUiControls() {
 
     if (key === 'h') {
       event.preventDefault();
-      togglePanel();
+      const panelHidden = stage.classList.contains('ui-hidden');
+      if (panelHidden && cameraIsHidden()) {
+        showPanel();
+        showCameraPreview();
+      } else {
+        togglePanel();
+      }
     } else if (key === 'd') {
       event.preventDefault();
       state.darkBackground = !state.darkBackground;
@@ -567,5 +738,8 @@ async function boot() {
   }
 }
 
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  requestAnimationFrame(clampCameraPosition);
+});
 boot();

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'matrix-kiosk-v2';
+const CACHE_NAME = 'matrix-kiosk-v3';
 const ASSETS = [
   './',
   './index.html',

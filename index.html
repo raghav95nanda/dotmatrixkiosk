@@ -37,18 +37,23 @@
           Mask threshold
           <input id="threshold" type="range" min="10" max="230" value="120" />
         </label>
+        <label>
+          <span class="label-row"><span>Matrix zoom</span><span id="zoomValue">100%</span></span>
+          <input id="matrixZoom" type="range" min="60" max="180" step="5" value="100" />
+        </label>
 
         <div class="button-row">
           <button id="toggleBackground" class="secondary-button" type="button">Background: White</button>
-          <button id="toggleCamera" type="button">Pause camera</button>
+          <button id="togglePreviewVisibility" class="secondary-button" type="button">Hide camera preview</button>
         </div>
+        <button id="toggleCamera" type="button">Pause camera</button>
       </div>
 
-      <p class="gesture-hint">Double-tap the artwork to show or hide controls.</p>
+      <p class="gesture-hint">Double-tap the artwork to show or hide controls. Double-tap the camera to hide it.</p>
     </section>
 
     <section class="camera-preview" id="cameraPreview" aria-label="Live camera preview">
-      <div class="preview-header">You</div>
+      <div class="preview-header"><span>You</span><span class="drag-hint">Drag to move</span></div>
       <div class="preview-body">
         <video id="video" playsinline muted></video>
       </div>
