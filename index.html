@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>Orange Head Matrix Silhouette</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="stage ui-hidden" aria-label="Orange SVG matrix silhouette rendered from webcam">
+    <canvas id="silhouette" aria-hidden="true"></canvas>
+
+    <section class="panel" id="settingsPanel" aria-label="Controls">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Webcam silhouette</p>
+          <h1>Matrix controls</h1>
+        </div>
+        <button id="closePanel" class="close-button" type="button" aria-label="Close controls">×</button>
+      </div>
+
+      <p class="status" id="status">Loading segmentation model…</p>
+      <p class="cache-status" id="cacheStatus">Offline cache: checking…</p>
+
+      <div class="controls">
+        <label>
+          Icon spacing
+          <input id="spacing" type="range" min="22" max="84" value="42" />
+        </label>
+        <label>
+          Icon size
+          <input id="iconSize" type="range" min="16" max="72" value="36" />
+        </label>
+        <label>
+          Mask threshold
+          <input id="threshold" type="range" min="10" max="230" value="120" />
+        </label>
+
+        <div class="button-row">
+          <button id="toggleBackground" class="secondary-button" type="button">Background: White</button>
+          <button id="togglePreview" class="secondary-button" type="button" aria-expanded="false">Show camera preview</button>
+        </div>
+
+        <button id="toggleCamera" type="button">Pause camera</button>
+      </div>
+
+      <section class="camera-preview preview-hidden" id="cameraPreview" aria-label="Webcam input preview">
+        <div class="preview-header">Webcam input</div>
+        <div class="preview-body">
+          <video id="video" playsinline muted></video>
+        </div>
+      </section>
+
+      <p class="gesture-hint">Double-tap anywhere outside this panel to show or hide controls.</p>
+    </section>
+
+    <canvas id="maskCanvas"></canvas>
+  </main>
+
+  <script src="mediapipe/selfie_segmentation.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
